@@ -800,7 +800,7 @@ const NAV = [
 
 export default function App() {
   const [section, setSection] = useState("dashboard");
-  const [sidebarAberta, setSidebarAberta] = useState(true);
+  const [sidebarAberta, setSidebarAberta] = useState(false);
 
   const renderSection = () => {
     switch (section) {
