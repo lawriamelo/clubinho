@@ -419,19 +419,29 @@ function Quotes() {
   const [newQuote, setNewQuote] = useState("");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchQuotes();
+useEffect(() => {
+  async function fetchQuotes() {
+    const { data } = await supabase
+      .from('quotes')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (data) setQuotesList(data);
+    setLoading(false);
+  }
 
-    // escuta novas citações em tempo real
-    const channel = supabase
-      .channel('quotes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quotes' }, payload => {
-        setQuotesList(q => [payload.new, ...q]);
-      })
-      .subscribe();
+  fetchQuotes();
 
-    return () => supabase.removeChannel(channel);
-  }, []);
+  const channel = supabase
+    .channel('quotes-realtime')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'quotes' },
+      (payload) => {
+        setQuotesList(prev => [payload.new, ...prev]);
+      }
+    )
+    .subscribe();
+
+  return () => supabase.removeChannel(channel);
+}, []);
 
   async function fetchQuotes() {
     const { data } = await supabase.from('quotes').select('*').order('created_at', { ascending: false });
@@ -495,47 +505,45 @@ function LiveChat() {
     { id: "off", label: "# off-topic" },
   ];
 
-  useEffect(() => {
-    // carrega mensagens do canal ativo
-    async function fetchMsgs() {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('room', activeRoom)
-        .order('created_at', { ascending: true })
-        .limit(50);
-      if (data) setMsgs(data);
-    }
+ useEffect(() => {
+  async function fetchMsgs() {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('room', activeRoom)
+      .order('created_at', { ascending: true })
+      .limit(50);
+    if (data) setMsgs(data);
+  }
 
-    // carrega membros online
-    async function fetchMembers() {
-      const { data } = await supabase.from('members').select('*').eq('online', true);
-      if (data) setMembers(data);
-    }
+  async function fetchMembers() {
+    const { data } = await supabase.from('members').select('*').eq('online', true);
+    if (data) setMembers(data);
+  }
 
-    fetchMsgs();
-    fetchMembers();
+  fetchMsgs();
+  fetchMembers();
 
-    // escuta novas mensagens em tempo real
-    const channel = supabase
-      .channel(`room:${activeRoom}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room=eq.${activeRoom}` },
-        payload => {
-          setMsgs(m => [...m, payload.new]);
-          setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-        }
-      )
-      .subscribe();
+  const channel = supabase
+    .channel(`chat-${activeRoom}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages',
+        filter: `room=eq.${activeRoom}` },
+      (payload) => {
+        setMsgs(prev => [...prev, payload.new]);
+      }
+    )
+    .subscribe();
 
-    return () => supabase.removeChannel(channel);
-  }, [activeRoom]);
+  return () => supabase.removeChannel(channel);
+}, [activeRoom]);
 
   async function send() {
-    if (!input.trim()) return;
-    const msg = { member_name: "Você", member_color: "#8a6a3a", text: input, room: activeRoom };
-    setInput("");
-    await supabase.from('messages').insert(msg);
-  }
+  if (!input.trim()) return;
+  const msg = { member_name: "Você", member_color: "#8a6a3a", text: input, room: activeRoom };
+  setInput("");
+  const { error } = await supabase.from('messages').insert(msg);
+  if (error) console.error("Erro ao enviar:", error);
+}
 
   return (
     <div>
@@ -792,6 +800,7 @@ const NAV = [
 
 export default function App() {
   const [section, setSection] = useState("dashboard");
+  const [sidebarAberta, setSidebarAberta] = useState(true);
 
   const renderSection = () => {
     switch (section) {
@@ -812,14 +821,45 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: "#0f0c09", color: "#c8b89a", fontFamily: "Georgia, 'Times New Roman', serif" }}>
       <div style={{ position: "fixed", inset: 0, opacity: 0.035, zIndex: 0, pointerEvents: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`, backgroundRepeat: "repeat", backgroundSize: "128px" }} />
 
-      <aside style={{ position: "fixed", left: 0, top: 0, width: "260px", height: "100vh", background: "#0d0a07", borderRight: "1px solid #1e1a14", display: "flex", flexDirection: "column", zIndex: 10 }}>
-        <div style={{ padding: "32px 28px 24px", borderBottom: "1px solid #1e1a14" }}>
+      {/* BOTÃO ☰ fixo — sempre visível */}
+      <button
+        onClick={() => setSidebarAberta(a => !a)}
+        style={{
+          position: "fixed", top: "24px", left: "20px", zIndex: 20,
+          background: "none", border: "none", cursor: "pointer",
+          color: "#e8d5b0", fontSize: "20px", lineHeight: 1,
+          padding: "6px 8px",
+          transition: "opacity 0.2s",
+        }}>
+        ☰
+      </button>
+
+      {/* OVERLAY — fundo escuro ao abrir */}
+      {sidebarAberta && (
+        <div
+          onClick={() => setSidebarAberta(false)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+            zIndex: 11, transition: "opacity 0.3s",
+          }}
+        />
+      )}
+
+      {/* SIDEBAR */}
+      <aside style={{
+        position: "fixed", left: 0, top: 0, width: "260px", height: "100vh",
+        background: "#0d0a07", borderRight: "1px solid #1e1a14",
+        display: "flex", flexDirection: "column", zIndex: 12,
+        transform: sidebarAberta ? "translateX(0)" : "translateX(-100%)",
+        transition: "transform 0.3s ease",
+      }}>
+        <div style={{ padding: "32px 28px 24px", borderBottom: "1px solid #1e1a14", paddingLeft: "52px" }}>
           <div style={{ fontSize: "9px", letterSpacing: "0.3em", textTransform: "uppercase", color: "#3a2e22", marginBottom: "5px" }}>clube do livro</div>
           <div style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: "22px", color: "#e8d5b0", fontStyle: "italic", lineHeight: 1.2 }}>Página<br />Virada</div>
         </div>
         <nav style={{ padding: "16px 0", flex: 1, overflowY: "auto" }}>
           {NAV.map(item => (
-            <button key={item.id} onClick={() => setSection(item.id)}
+            <button key={item.id} onClick={() => { setSection(item.id); setSidebarAberta(false); }}
               style={{ display: "flex", alignItems: "center", gap: "10px", width: "100%", padding: "10px 28px", background: "none", border: "none", cursor: "pointer", textAlign: "left", transition: "all 0.2s", color: section === item.id ? "#e8d5b0" : "#4a3c2e", borderLeft: section === item.id ? "2px solid #e8d5b0" : "2px solid transparent" }}>
               <span style={{ fontSize: "13px", position: "relative" }}>
                 {item.icon}
@@ -835,9 +875,10 @@ export default function App() {
         </div>
       </aside>
 
-      <main style={{ marginLeft: "260px", padding: "44px 44px 60px 48px", position: "relative", zIndex: 2 }}>
+      {/* MAIN — ocupa a tela toda agora */}
+      <main style={{ padding: "44px 44px 60px 72px", position: "relative", zIndex: 2 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "40px" }}>
-          <div>
+          <div style={{ paddingLeft: "16px" }}>
             <div style={{ fontSize: "9px", letterSpacing: "0.3em", textTransform: "uppercase", color: "#3a2e22", marginBottom: "6px" }}>Abril 2026 · Semana 3</div>
             <h1 style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: "32px", color: "#e8d5b0", fontWeight: 400, margin: 0 }}>Bom dia, Mariana.</h1>
             <p style={{ color: "#4a3a2e", fontSize: "12px", marginTop: "4px", fontStyle: "italic" }}>Você está no ritmo. Continue assim.</p>
